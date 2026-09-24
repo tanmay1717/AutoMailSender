@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoMailSender</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #6b7280; --border: #e3e6eb;
+    --accent: #2563eb; --accent-soft: #e8efff; --ok: #15803d; --ok-soft: #e7f6ec;
+    --err: #b91c1c; --err-soft: #fdecec; --warn: #a16207; --warn-soft: #fdf6e3;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); font-size: 14px; }
+  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 16px 24px; }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px;
+         display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; min-width: 0; }
+  .card.full { grid-column: 1 / -1; }
+  .card h2 { margin: 0 0 14px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .step { background: var(--accent); color: #fff; border-radius: 50%; width: 22px; height: 22px;
+          display: inline-grid; place-items: center; font-size: 12px; flex: none; }
+  label { display: block; font-weight: 600; margin: 12px 0 5px; }
+  .hint { color: var(--muted); font-weight: 400; font-size: 12px; }
+  input[type=text], input[type=email], input[type=password], input[type=number], select, textarea {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 7px;
+    font: inherit; color: inherit; background: #fff; }
+  textarea { min-height: 260px; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  button { font: inherit; cursor: pointer; border-radius: 7px; border: 1px solid var(--border);
+           background: #fff; padding: 8px 14px; color: inherit; }
+  button:hover { background: #f3f4f6; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); background: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .drop { border: 2px dashed var(--border); border-radius: 10px; padding: 26px; text-align: center;
+          color: var(--muted); cursor: pointer; transition: .15s; }
+  .drop.over, .drop:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .table-wrap { overflow: auto; max-height: 260px; border: 1px solid var(--border); border-radius: 7px; margin-top: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+  th { background: #f9fafb; position: sticky; top: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip { background: var(--accent-soft); color: var(--accent); border: none; border-radius: 99px;
+          padding: 4px 10px; font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
+  .chip:hover { background: #d6e2ff; }
+  .toolbar { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; }
+  .toolbar button { padding: 4px 10px; font-size: 13px; }
+  .check { display: flex; align-items: center; gap: 6px; font-weight: 400; margin-top: 8px; }
+  .preview-head { background: #f9fafb; border: 1px solid var(--border); border-bottom: none;
+                  border-radius: 7px 7px 0 0; padding: 10px 12px; font-size: 13px; }
+  .preview-head div { margin: 2px 0; overflow-wrap: anywhere; }
+  iframe { width: 100%; height: 340px; border: 1px solid var(--border); border-radius: 0 0 7px 7px; background: #fff; display: block; }
+  .msg { padding: 9px 12px; border-radius: 7px; margin-top: 10px; font-size: 13px; }
+  .msg.err { background: var(--err-soft); color: var(--err); }
+  .msg.warn { background: var(--warn-soft); color: var(--warn); }
+  .msg.ok { background: var(--ok-soft); color: var(--ok); }
+  .hidden { display: none !important; }
+  .att-list { list-style: none; padding: 0; margin: 10px 0 0; }
+  .att-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px;
+                 border: 1px solid var(--border); border-radius: 7px; margin-bottom: 6px; overflow-wrap: anywhere; }
+  .att-list button { padding: 2px 8px; color: var(--err); flex: none; }
+  .progress { height: 10px; background: #eef0f3; border-radius: 99px; overflow: hidden; margin-top: 14px; }
+  .progress div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .badge { padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+  .badge.sent { background: var(--ok-soft); color: var(--ok); }
+  .badge.failed { background: var(--err-soft); color: var(--err); }
+  .badge.skipped { background: var(--warn-soft); color: var(--warn); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>✉️ AutoMailSender</h1>
+  <p>Send a personalised email to everyone in your Excel file from your Gmail account.</p>
+</header>
+
+<main>
+  <!-- 1. Gmail -->
+  <section class="card">
+    <h2><span class="step">1</span> Gmail account</h2>
+    <label for="gmail" style="margin-top:0">Gmail address</label>
+    <input id="gmail" type="email" placeholder="you@gmail.com" autocomplete="username">
+    <label for="appPassword">App Password <span class="hint">— 16 characters, not your normal password</span></label>
+    <input id="appPassword" type="password" placeholder="abcd efgh ijkl mnop" autocomplete="current-password">
+    <label for="senderName">Sender name <span class="hint">(optional, shown as "From")</span></label>
+    <input id="senderName" type="text" placeholder="e.g. Tanmay Shetty">
+    <div class="row" style="margin-top:12px">
+      <button type="button" id="verifyBtn">Test login</button>
+      <span class="hint">
+        Get an App Password: turn on 2-Step Verification, then go to
+        <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a>.
+        Your password is never saved.
+      </span>
+    </div>
+    <div id="verifyMsg"></div>
+  </section>
+
+  <!-- 2. Excel -->
+  <section class="card">
+    <h2><span class="step">2</span> Recipients (Excel)</h2>
+    <div id="drop" class="drop">
+      <strong>Click to choose</strong> or drag an Excel file here (.xlsx, .xls, .csv)<br>
+      <span class="hint">The first row must be column headings, e.g. Name, Email, Code</span>
+    </div>
+    <input id="excelInput" type="file" accept=".xlsx,.xlsm,.xls,.csv" class="hidden">
+    <div id="excelInfo" class="hidden">
+      <div class="row" style="margin-top:12px; justify-content:space-between">
+        <span id="excelSummary"></span>
+        <div class="row">
+          <label for="emailColumn" style="margin:0">Email column:</label>
+          <select id="emailColumn" style="width:auto"></select>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="dataTable"></table></div>
+    </div>
+    <div id="excelMsg"></div>
+  </section>
+
+  <!-- 3. Template -->
+  <section class="card">
+    <h2><span class="step">3</span> Email template</h2>
+    <label style="margin-top:0">Placeholders <span class="hint">— click one to insert it where your cursor is</span></label>
+    <div id="chips" class="chips"><span class="hint">Upload an Excel file to see its columns.</span></div>
+    <label for="subject">Subject</label>
+    <input id="subject" type="text" value="Hi {{First Name}}, your Nexus registration code">
+    <label for="body">Message <span class="hint">(HTML allowed)</span></label>
+    <div class="toolbar">
+      <button type="button" data-wrap="b" title="Bold"><b>B</b></button>
+      <button type="button" data-wrap="i" title="Italic"><i>I</i></button>
+      <button type="button" data-wrap="u" title="Underline"><u>U</u></button>
+      <button type="button" data-wrap="h2" title="Heading">H</button>
+      <button type="button" id="linkBtn" title="Insert link">🔗 Link</button>
+    </div>
+    <textarea id="body">Dear {{First Name}},
+
+Thank you for pre-registering for <b>Nexus</b>! We have received your registration.
+
+Your unique code is: <b style="font-size:18px">{{Code}}</b>
+
+Please keep this code safe. You will need it at the event.
+
+Best regards,
+Team Nexus</textarea>
+    <label class="check"><input type="checkbox" id="convertLineBreaks" checked> Keep my line breaks (turn this off if you paste full HTML)</label>
+  </section>
+
+  <!-- 4. Preview -->
+  <section class="card">
+    <h2><span class="step">4</span> Preview</h2>
+    <div class="row" style="justify-content:space-between; margin-bottom:10px">
+      <button type="button" id="prevBtn">◀ Previous</button>
+      <span id="previewPos" class="hint">No recipients yet</span>
+      <button type="button" id="nextBtn">Next ▶</button>
+    </div>
+    <div class="preview-head">
+      <div><strong>To:</strong> <span id="pvTo">—</span></div>
+      <div><strong>Subject:</strong> <span id="pvSubject">—</span></div>
+    </div>
+    <iframe id="pvFrame" sandbox title="Email preview"></iframe>
+    <div id="previewMsg"></div>
+  </section>
+
+  <!-- 5. Attachments -->
+  <section class="card">
+    <h2><span class="step">5</span> Attachments <span class="hint">(optional, sent to everyone)</span></h2>
+    <button type="button" id="attBtn">📎 Add files</button>
+    <input id="attInput" type="file" multiple class="hidden">
+    <ul id="attList" class="att-list"></ul>
+    <p id="attTotal" class="hint"></p>
+  </section>
+
+  <!-- 6. Send -->
+  <section class="card">
+    <h2><span class="step">6</span> Send</h2>
+    <label for="delay" style="margin-top:0">Delay between emails (seconds) <span class="hint">— helps you stay under Gmail's limits</span></label>
+    <input id="delay" type="number" min="0" step="0.5" value="1" style="max-width:140px">
+    <div class="row" style="margin-top:14px">
+      <button type="button" class="primary" id="sendBtn">🚀 Send to all recipients</button>
+      <button type="button" id="stopBtn" class="hidden">■ Stop</button>
+    </div>
+    <p class="hint" style="margin-top:10px">A normal Gmail account can send about 500 emails a day. Keep this tab open while sending.</p>
+    <div id="sendMsg"></div>
+    <div id="progressWrap" class="hidden">
+      <div class="progress"><div id="progressBar"></div></div>
+      <p id="progressText" class="hint"></p>
+    </div>
+  </section>
+
+  <!-- Results -->
+  <section id="resultsCard" class="card full hidden">
+    <h2>Results</h2>
+    <div class="table-wrap" style="max-height:400px">
+      <table><thead><tr><th>Excel row</th><th>Email</th><th>Status</th><th>Details</th></tr></thead>
+        <tbody id="resultsBody"></tbody></table>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+let rows = [], columns = [], previewIndex = 0, attachments = [], stopRequested = false;
+let maxAttachmentBytes = 3 * 1048576;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const showMsg = (el, text, kind = "err") =>
+  { $(el).innerHTML = text ? `<div class="msg ${kind}">${text}</div>` : ""; };
+const fmtSize = (b) => b >= 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.ceil(b / 1024) + " KB";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function api(url, body) {
+  const res = await fetch(url, body === undefined ? {} :
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({ error: `Server error (${res.status})` }));
+  if (!res.ok) throw new Error(data.error || "Request failed");
+  return data;
+}
+
+api("/api/config").then((c) => { maxAttachmentBytes = c.maxAttachmentBytes; renderAttachments(); }).catch(() => {});
+
+// Remember the non-secret fields in this browser
+["gmail", "senderName"].forEach((id) => {
+  try { $(id).value = localStorage.getItem("ams_" + id) || $(id).value; } catch (e) {}
+  $(id).addEventListener("change", () => { try { localStorage.setItem("ams_" + id, $(id).value); } catch (e) {} });
+});
+
+const creds = () => ({ gmail: $("gmail").value.trim(), appPassword: $("appPassword").value, senderName: $("senderName").value });
+
+$("verifyBtn").onclick = async () => {
+  showMsg("verifyMsg", "Checking…", "warn");
+  try { await api("/api/verify", creds()); showMsg("verifyMsg", "✓ Login works. You're ready to send.", "ok"); }
+  catch (err) { showMsg("verifyMsg", esc(err.message)); }
+};
+
+// ---------- Excel
+const drop = $("drop");
+drop.onclick = () => $("excelInput").click();
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) loadExcel(e.dataTransfer.files[0]); };
+$("excelInput").onchange = (e) => { if (e.target.files[0]) loadExcel(e.target.files[0]); e.target.value = ""; };
+
+async function loadExcel(file) {
+  showMsg("excelMsg", "");
+  try {
+    const wb = XLSX.read(await file.arrayBuffer());
+    // raw:false returns text as Excel displays it, so codes like 00123 keep their zeros.
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: "" });
+    if (!grid.length) throw new Error("The sheet is empty.");
+    // Form exports often have line breaks inside headings; flatten them so {{placeholders}} match.
+    columns = grid[0].map((h, i) => normKey(h) || `Column${i + 1}`);
+    rows = grid.slice(1)
+      .map((r) => Object.fromEntries(columns.map((c, i) => [c, String(r[i] ?? "").trim()])))
+      .filter((r) => Object.values(r).some(Boolean));
+    // Offer {{First Name}} derived from a "Name"/"Full Name" column.
+    const nameCol = columns.find((c) => /^(full\s*)?name$/i.test(c));
+    if (nameCol && !columns.some((c) => /^first\s*name$/i.test(c))) {
+      columns.push("First Name");
+      rows.forEach((r) => (r["First Name"] = r[nameCol].split(/\s+/)[0] || ""));
+    }
+  } catch (err) {
+    return showMsg("excelMsg", "Could not read this file: " + esc(err.message));
+  }
+  previewIndex = 0;
+  const guess = columns.find((c) => /mail/i.test(c)) || columns[0];
+  $("excelSummary").innerHTML = `<strong>${esc(file.name)}</strong> — ${rows.length} recipient(s)`;
+  $("emailColumn").innerHTML = columns.map((c) => `<option ${c === guess ? "selected" : ""}>${esc(c)}</option>`).join("");
+  $("dataTable").innerHTML =
+    "<thead><tr><th>#</th>" + columns.map((c) => `<th>${esc(c)}</th>`).join("") + "</tr></thead><tbody>" +
+    rows.map((r, i) => `<tr><td>${i + 1}</td>` + columns.map((c) => `<td>${esc(r[c])}</td>`).join("") + "</tr>").join("") +
+    "</tbody>";
+  $("excelInfo").classList.remove("hidden");
+  $("chips").innerHTML = columns.map((c) => `<button type="button" class="chip" data-col="${esc(c)}">{{${esc(c)}}}</button>`).join("");
+  if (!rows.length) showMsg("excelMsg", "No data rows found under the heading row.", "warn");
+  const invalid = rows.filter((r) => !EMAIL_RE.test(r[guess])).length;
+  if (rows.length && invalid) showMsg("excelMsg", `${invalid} row(s) have a missing or invalid email in "${esc(guess)}" and will be skipped.`, "warn");
+  refreshPreview();
+}
+$("emailColumn").onchange = refreshPreview;
+
+// ---------- Template filling
+const normKey = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
+
+// Placeholders match column headings ignoring case and extra spaces/line breaks.
+function fill(template, row, escapeValues) {
+  const lookup = Object.fromEntries(Object.entries(row).map(([k, v]) => [normKey(k).toLowerCase(), v]));
+  const missing = new Set();
+  const text = template.replace(/\{\{([\s\S]+?)\}\}/g, (m, rawKey) => {
+    const key = normKey(rawKey).toLowerCase();
+    if (!(key in lookup)) { missing.add(normKey(rawKey)); return m; }
+    const v = lookup[key];
+    return escapeValues ? esc(v) : v;
+  });
+  return { text, missing };
+}
+
+function render(row) {
+  let body = $("body").value;
+  if ($("convertLineBreaks").checked) body = body.replace(/\r?\n/g, "<br>\n");
+  const s = fill($("subject").value, row, false);
+  const b = fill(body, row, true);
+  return { to: row[$("emailColumn").value] || "", subject: s.text, html: b.text,
+           missing: [...new Set([...s.missing, ...b.missing])] };
+}
+
+// ---------- Editing helpers
+let lastFocused = $("body");
+["subject", "body"].forEach((id) => $(id).addEventListener("focus", () => (lastFocused = $(id))));
+
+function insertAtCursor(el, before, after = "") {
+  const s = el.selectionStart, e = el.selectionEnd, v = el.value;
+  el.value = v.slice(0, s) + before + v.slice(s, e) + after + v.slice(e);
+  el.focus();
+  el.selectionStart = s + before.length;
+  el.selectionEnd = e + before.length;
+  refreshPreview();
+}
+$("chips").onclick = (e) => {
+  const col = e.target.closest(".chip")?.dataset.col;
+  if (col) insertAtCursor(lastFocused, `{{${col}}}`);
+};
+document.querySelectorAll("[data-wrap]").forEach((b) =>
+  (b.onclick = () => insertAtCursor($("body"), `<${b.dataset.wrap}>`, `</${b.dataset.wrap}>`)));
+$("linkBtn").onclick = () => {
+  const url = prompt("Link address (https://…)");
+  if (url) insertAtCursor($("body"), `<a href="${esc(url)}">`, "</a>");
+};
+
+// ---------- Preview
+function refreshPreview() {
+  if (!rows.length) return;
+  previewIndex = Math.max(0, Math.min(previewIndex, rows.length - 1));
+  const p = render(rows[previewIndex]);
+  $("previewPos").textContent = `Recipient ${previewIndex + 1} of ${rows.length}`;
+  $("pvTo").textContent = p.to || "(no email)";
+  $("pvSubject").textContent = p.subject;
+  $("pvFrame").srcdoc = `<body style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;margin:14px">${p.html}</body>`;
+  showMsg("previewMsg", p.missing.length
+    ? "These placeholders don't match any Excel column: " + p.missing.map((m) => `<code>{{${esc(m)}}}</code>`).join(", ")
+    : "", "warn");
+}
+["subject", "body"].forEach((id) => $(id).addEventListener("input", refreshPreview));
+$("convertLineBreaks").onchange = refreshPreview;
+$("prevBtn").onclick = () => { previewIndex--; refreshPreview(); };
+$("nextBtn").onclick = () => { previewIndex++; refreshPreview(); };
+
+// ---------- Attachments (kept in the browser, sent with each email)
+$("attBtn").onclick = () => $("attInput").click();
+$("attInput").onchange = async (e) => {
+  for (const f of e.target.files) {
+    const data = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result.split(",")[1]);
+      r.onerror = reject;
+      r.readAsDataURL(f);
+    });
+    attachments.push({ name: f.name, type: f.type || "application/octet-stream", size: f.size, data });
+  }
+  e.target.value = "";
+  renderAttachments();
+};
+$("attList").onclick = (e) => {
+  const i = e.target.dataset.remove;
+  if (i !== undefined) { attachments.splice(+i, 1); renderAttachments(); }
+};
+const attachmentTotal = () => attachments.reduce((s, a) => s + a.size, 0);
+function renderAttachments() {
+  $("attList").innerHTML = attachments.map((a, i) =>
+    `<li><span>📄 ${esc(a.name)} <span class="hint">(${fmtSize(a.size)})</span></span><button type="button" data-remove="${i}">Remove</button></li>`).join("");
+  const total = attachmentTotal();
+  $("attTotal").innerHTML = `Total: ${fmtSize(total)} of ${fmtSize(maxAttachmentBytes)} allowed` +
+    (total > maxAttachmentBytes ? ' — <span style="color:var(--err)">too large, remove some files</span>' : "");
+}
+
+// ---------- Send
+$("stopBtn").onclick = () => { stopRequested = true; $("stopBtn").disabled = true; };
+
+$("sendBtn").onclick = async () => {
+  showMsg("sendMsg", "");
+  const c = creds();
+  if (!rows.length) return showMsg("sendMsg", "Upload an Excel file first (step 2).");
+  if (!c.gmail || !c.appPassword) return showMsg("sendMsg", "Enter your Gmail address and App Password (step 1).");
+  if (!$("subject").value.trim() || !$("body").value.trim()) return showMsg("sendMsg", "Subject and message cannot be empty.");
+  const missing = render(Object.fromEntries(columns.map((k) => [k, ""]))).missing;
+  if (missing.length) return showMsg("sendMsg", "Fix unknown placeholder(s) first: " + missing.map((m) => `{{${esc(m)}}}`).join(", "));
+  if (attachmentTotal() > maxAttachmentBytes) return showMsg("sendMsg", "Attachments are too large.");
+  const extra = attachments.length ? ` with ${attachments.length} attachment(s)` : "";
+  if (!confirm(`Send ${rows.length} email(s)${extra} from ${c.gmail}?`)) return;
+
+  $("sendBtn").disabled = true;
+  try { await api("/api/verify", c); }
+  catch (err) { $("sendBtn").disabled = false; return showMsg("sendMsg", esc(err.message)); }
+
+  stopRequested = false;
+  $("stopBtn").disabled = false;
+  $("stopBtn").classList.remove("hidden");
+  $("progressWrap").classList.remove("hidden");
+  $("resultsCard").classList.remove("hidden");
+  $("resultsBody").innerHTML = "";
+  const delayMs = Math.max(0, parseFloat($("delay").value) || 0) * 1000;
+  const counts = { sent: 0, failed: 0, skipped: 0 };
+  const files = attachments.map(({ name, type, data }) => ({ name, type, data }));
+
+  let done = 0;
+  for (let i = 0; i < rows.length && !stopRequested; i++) {
+    const mail = render(rows[i]);
+    let status = "sent", detail = "";
+    if (!EMAIL_RE.test(mail.to)) { status = "skipped"; detail = "Missing or invalid email"; }
+    else {
+      try { await api("/api/send", { ...c, to: mail.to, subject: mail.subject, html: mail.html, attachments: files }); }
+      catch (err) { status = "failed"; detail = err.message; }
+    }
+    counts[status]++;
+    done = i + 1;
+    $("resultsBody").insertAdjacentHTML("beforeend",
+      `<tr><td>${i + 2}</td><td>${esc(mail.to || "—")}</td><td><span class="badge ${status}">${status}</span></td><td>${esc(detail)}</td></tr>`);
+    $("progressBar").style.width = (done / rows.length) * 100 + "%";
+    $("progressText").textContent = `${done} / ${rows.length} processed — ${counts.sent} sent, ${counts.failed} failed, ${counts.skipped} skipped`;
+    if (status === "sent" && delayMs && i < rows.length - 1) await sleep(delayMs);
+  }
+
+  const stopped = stopRequested && done < rows.length ? ` Stopped after ${done} of ${rows.length}.` : "";
+  showMsg("sendMsg", `Done! ${counts.sent} email(s) sent.` +
+    (counts.failed ? ` ${counts.failed} failed — see Results below.` : "") + stopped,
+    counts.failed || stopped ? "warn" : "ok");
+  $("sendBtn").disabled = false;
+  $("stopBtn").classList.add("hidden");
+};
+</script>
+</body>
+</html>

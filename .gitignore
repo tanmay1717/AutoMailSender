@@ -1,0 +1,12 @@
+__pycache__/
+.venv/
+.vercel/
+.env
+.DS_Store
+
+# Participant data must never be committed
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+!sample_recipients.xlsx
