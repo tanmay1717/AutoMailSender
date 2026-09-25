@@ -253,13 +253,13 @@ async function api(url, body) {
   return data;
 }
 
-let appConfig = { msClientId: "", msTenant: "common" };
+let appConfig = { msClientId: "", msTenant: "common" }, configError = "";
 api("/api/config").then((c) => {
   appConfig = c;
   maxAttachmentBytes = c.maxAttachmentBytes;
   renderAttachments();
   if (c.msClientId) getMsal().then(showMsAccount).catch((e) => showMsg("msMsg", esc(e.message)));
-}).catch(() => {});
+}).catch((e) => { configError = `Can't reach this site's server (/api/config: ${e.message}). Check the deployment.`; });
 
 // Remember the non-secret fields in this browser
 ["gmail", "senderName"].forEach((id) => {
@@ -301,6 +301,7 @@ let msalApp = null, msAccount = null;
 
 async function getMsal() {
   if (msalApp) return msalApp;
+  if (configError) throw new Error(configError);
   if (!appConfig.msClientId) {
     throw new Error("Microsoft sign-in isn't set up yet. Add the MS_CLIENT_ID setting (see README → Microsoft 365 setup).");
   }
