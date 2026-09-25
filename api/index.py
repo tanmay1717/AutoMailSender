@@ -54,7 +54,10 @@ def smtp_error(e):
 
 @app.get("/api/config")
 def config():
-    return jsonify(maxAttachmentBytes=MAX_ATTACHMENT_BYTES, onVercel=ON_VERCEL)
+    # MS_CLIENT_ID is the (non-secret) Application ID of your Microsoft Entra app registration.
+    return jsonify(maxAttachmentBytes=MAX_ATTACHMENT_BYTES, onVercel=ON_VERCEL,
+                   msClientId=os.environ.get("MS_CLIENT_ID", "").strip(),
+                   msTenant=os.environ.get("MS_TENANT", "").strip() or "common")
 
 
 @app.post("/api/verify")
@@ -123,7 +126,13 @@ def index():
     return send_from_directory(PUBLIC_DIR, "index.html")
 
 
+@app.get("/auth.html")
+def auth_page():
+    return send_from_directory(PUBLIC_DIR, "auth.html")
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))
-    print(f"\n  AutoMailSender running at  http://127.0.0.1:{port}\n")
-    app.run(host="127.0.0.1", port=port)
+    # Use "localhost" (not 127.0.0.1): Microsoft sign-in only accepts http://localhost redirect URLs.
+    print(f"\n  AutoMailSender running at  http://localhost:{port}\n")
+    app.run(host="localhost", port=port)

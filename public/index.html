@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AutoMailSender</title>
+<link rel="icon" href="data:,">
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@4.30.0/lib/msal-browser.min.js"></script>
 <style>
   :root {
     --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #6b7280; --border: #e3e6eb;
@@ -73,6 +75,10 @@
   .badge.failed { background: var(--err-soft); color: var(--err); }
   .badge.skipped { background: var(--warn-soft); color: var(--warn); }
   a { color: var(--accent); }
+  .tabs { display: flex; gap: 4px; background: #f1f3f6; padding: 4px; border-radius: 9px; margin-bottom: 16px; }
+  .tab { flex: 1; border: none; background: transparent; padding: 7px 10px; border-radius: 6px; color: var(--muted); font-weight: 600; }
+  .tab:hover { background: rgba(255,255,255,.6); }
+  .tab.active { background: #fff; color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 </style>
 </head>
 <body>
@@ -84,8 +90,30 @@
 <main>
   <!-- 1. Gmail -->
   <section class="card">
-    <h2><span class="step">1</span> Gmail account</h2>
-    <label for="gmail" style="margin-top:0">Gmail address</label>
+    <h2><span class="step">1</span> Send from</h2>
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab active" data-provider="gmail" role="tab">Gmail</button>
+      <button type="button" class="tab" data-provider="outlook" role="tab">Microsoft 365 / Outlook</button>
+    </div>
+
+    <div id="outlookPanel" class="hidden">
+      <div id="msSignedOut">
+        <button type="button" class="primary" id="msLoginBtn">Sign in with Microsoft</button>
+        <p class="hint" style="margin-top:10px">
+          For work or organisation accounts (e.g. <strong>@d227toastmasters.org</strong>) and Outlook.com.
+          A Microsoft window opens, and you sign in and click <em>Accept</em>. Your password never reaches this app.
+          Sent emails appear in your Outlook <em>Sent Items</em>.
+        </p>
+      </div>
+      <div id="msSignedIn" class="row hidden">
+        <span>✓ Signed in as <strong id="msUser"></strong></span>
+        <button type="button" id="msLogoutBtn">Sign out</button>
+      </div>
+      <div id="msMsg"></div>
+    </div>
+
+    <div id="gmailPanel">
+    <label for="gmail">Gmail address</label>
     <input id="gmail" type="email" placeholder="you@gmail.com" autocomplete="username">
     <label for="appPassword">App Password <span class="hint">— 16 characters, not your normal password</span></label>
     <input id="appPassword" type="password" placeholder="abcd efgh ijkl mnop" autocomplete="current-password">
@@ -100,6 +128,7 @@
       </span>
     </div>
     <div id="verifyMsg"></div>
+    </div>
   </section>
 
   <!-- 2. Excel -->
@@ -185,7 +214,7 @@ Team Nexus</textarea>
       <button type="button" class="primary" id="sendBtn">🚀 Send to all recipients</button>
       <button type="button" id="stopBtn" class="hidden">■ Stop</button>
     </div>
-    <p class="hint" style="margin-top:10px">A normal Gmail account can send about 500 emails a day. Keep this tab open while sending.</p>
+    <p class="hint" style="margin-top:10px"><span id="limitHint">A normal Gmail account can send about 500 emails a day.</span> Keep this tab open while sending.</p>
     <div id="sendMsg"></div>
     <div id="progressWrap" class="hidden">
       <div class="progress"><div id="progressBar"></div></div>
@@ -224,7 +253,13 @@ async function api(url, body) {
   return data;
 }
 
-api("/api/config").then((c) => { maxAttachmentBytes = c.maxAttachmentBytes; renderAttachments(); }).catch(() => {});
+let appConfig = { msClientId: "", msTenant: "common" };
+api("/api/config").then((c) => {
+  appConfig = c;
+  maxAttachmentBytes = c.maxAttachmentBytes;
+  renderAttachments();
+  if (c.msClientId) getMsal().then(showMsAccount).catch((e) => showMsg("msMsg", esc(e.message)));
+}).catch(() => {});
 
 // Remember the non-secret fields in this browser
 ["gmail", "senderName"].forEach((id) => {
@@ -239,6 +274,117 @@ $("verifyBtn").onclick = async () => {
   try { await api("/api/verify", creds()); showMsg("verifyMsg", "✓ Login works. You're ready to send.", "ok"); }
   catch (err) { showMsg("verifyMsg", esc(err.message)); }
 };
+
+// ---------- Provider switch (Gmail / Microsoft)
+let provider = "gmail";
+function setProvider(p) {
+  provider = p;
+  try { localStorage.setItem("ams_provider", p); } catch (e) {}
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.provider === p));
+  $("gmailPanel").classList.toggle("hidden", p !== "gmail");
+  $("outlookPanel").classList.toggle("hidden", p !== "outlook");
+  $("limitHint").textContent = p === "gmail"
+    ? "A normal Gmail account can send about 500 emails a day."
+    : "Microsoft 365 allows about 30 emails a minute and 10,000 recipients a day (Outlook.com: ~300 a day).";
+  // Microsoft throttles above ~30 messages/minute, so keep at least 2 s between emails.
+  if (p === "outlook" && (parseFloat($("delay").value) || 0) < 2) $("delay").value = 2;
+  renderAttachments();
+}
+document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => setProvider(t.dataset.provider)));
+
+// Graph's sendMail rejects requests over 4 MB, and attachments grow ~33% as base64.
+const maxAttachment = () => provider === "outlook" ? Math.min(maxAttachmentBytes, 3 * 1048576) : maxAttachmentBytes;
+
+// ---------- Microsoft sign-in (MSAL) and sending via Microsoft Graph
+const MS_SCOPES = ["User.Read", "Mail.Send"];
+let msalApp = null, msAccount = null;
+
+async function getMsal() {
+  if (msalApp) return msalApp;
+  if (!appConfig.msClientId) {
+    throw new Error("Microsoft sign-in isn't set up yet. Add the MS_CLIENT_ID setting (see README → Microsoft 365 setup).");
+  }
+  const app = new msal.PublicClientApplication({
+    auth: { clientId: appConfig.msClientId, authority: `https://login.microsoftonline.com/${appConfig.msTenant}`,
+            redirectUri: location.origin + "/auth.html" },
+    cache: { cacheLocation: "sessionStorage" },
+  });
+  await app.initialize();
+  msalApp = app;
+  msAccount = app.getAllAccounts()[0] || null;
+  return app;
+}
+
+function showMsAccount() {
+  $("msSignedOut").classList.toggle("hidden", !!msAccount);
+  $("msSignedIn").classList.toggle("hidden", !msAccount);
+  $("msUser").textContent = msAccount ? msAccount.username : "";
+}
+
+function msErrorText(e) {
+  const m = String(e?.errorMessage || e?.message || e);
+  if (/user_cancelled|popup_window_error.*closed/i.test(m)) return "Sign-in was cancelled.";
+  if (/popup_window_error|BrowserAuthError: popup/i.test(m)) return "Your browser blocked the sign-in popup. Allow popups for this site and try again.";
+  if (/AADSTS65001|AADSTS90094|admin|consent/i.test(m))
+    return "Your organisation needs an admin to approve this app before you can use it. " +
+           "Ask your Microsoft 365 admin to grant consent (see README → Microsoft 365 setup).";
+  return m;
+}
+
+$("msLoginBtn").onclick = async () => {
+  showMsg("msMsg", "");
+  try {
+    const app = msalApp || await getMsal();
+    msAccount = (await app.loginPopup({ scopes: MS_SCOPES, prompt: "select_account" })).account;
+    showMsAccount();
+  } catch (e) { showMsg("msMsg", esc(msErrorText(e))); }
+};
+$("msLogoutBtn").onclick = async () => {
+  if (msalApp && msAccount) await msalApp.clearCache({ account: msAccount }).catch(() => {});
+  msAccount = null;
+  showMsAccount();
+};
+
+async function msToken() {
+  const app = await getMsal();
+  if (!msAccount) throw new Error("Sign in with Microsoft first (step 1).");
+  try {
+    return (await app.acquireTokenSilent({ scopes: MS_SCOPES, account: msAccount })).accessToken;
+  } catch (e) {
+    if (e instanceof msal.InteractionRequiredAuthError) {
+      return (await app.acquireTokenPopup({ scopes: MS_SCOPES, account: msAccount })).accessToken;
+    }
+    throw e;
+  }
+}
+
+async function sendViaGraph(mail, files) {
+  const message = {
+    subject: mail.subject,
+    body: { contentType: "HTML",
+            content: `<html><body style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5">${mail.html}</body></html>` },
+    toRecipients: [{ emailAddress: { address: mail.to } }],
+  };
+  if (files.length) {
+    message.attachments = files.map((a) => ({ "@odata.type": "#microsoft.graph.fileAttachment",
+      name: a.name, contentType: a.type, contentBytes: a.data }));
+  }
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + await msToken(), "Content-Type": "application/json" },
+      body: JSON.stringify({ message, saveToSentItems: true }),
+    });
+    if (res.ok) return;
+    if (res.status === 429 || res.status === 503) {  // throttled: wait and retry
+      await sleep((parseInt(res.headers.get("Retry-After"), 10) || 15) * 1000);
+      continue;
+    }
+    const err = await res.json().catch(() => null);
+    throw new Error(err?.error?.message || `Microsoft returned error ${res.status}`);
+  }
+  throw new Error("Microsoft is limiting how fast you can send. Try a longer delay.");
+}
 
 // ---------- Excel
 const drop = $("drop");
@@ -376,8 +522,8 @@ function renderAttachments() {
   $("attList").innerHTML = attachments.map((a, i) =>
     `<li><span>📄 ${esc(a.name)} <span class="hint">(${fmtSize(a.size)})</span></span><button type="button" data-remove="${i}">Remove</button></li>`).join("");
   const total = attachmentTotal();
-  $("attTotal").innerHTML = `Total: ${fmtSize(total)} of ${fmtSize(maxAttachmentBytes)} allowed` +
-    (total > maxAttachmentBytes ? ' — <span style="color:var(--err)">too large, remove some files</span>' : "");
+  $("attTotal").innerHTML = `Total: ${fmtSize(total)} of ${fmtSize(maxAttachment())} allowed` +
+    (total > maxAttachment() ? ' — <span style="color:var(--err)">too large, remove some files</span>' : "");
 }
 
 // ---------- Send
@@ -386,18 +532,21 @@ $("stopBtn").onclick = () => { stopRequested = true; $("stopBtn").disabled = tru
 $("sendBtn").onclick = async () => {
   showMsg("sendMsg", "");
   const c = creds();
+  const outlook = provider === "outlook";
   if (!rows.length) return showMsg("sendMsg", "Upload an Excel file first (step 2).");
-  if (!c.gmail || !c.appPassword) return showMsg("sendMsg", "Enter your Gmail address and App Password (step 1).");
+  if (outlook && !msAccount) return showMsg("sendMsg", "Sign in with Microsoft first (step 1).");
+  if (!outlook && (!c.gmail || !c.appPassword)) return showMsg("sendMsg", "Enter your Gmail address and App Password (step 1).");
   if (!$("subject").value.trim() || !$("body").value.trim()) return showMsg("sendMsg", "Subject and message cannot be empty.");
   const missing = render(Object.fromEntries(columns.map((k) => [k, ""]))).missing;
   if (missing.length) return showMsg("sendMsg", "Fix unknown placeholder(s) first: " + missing.map((m) => `{{${esc(m)}}}`).join(", "));
-  if (attachmentTotal() > maxAttachmentBytes) return showMsg("sendMsg", "Attachments are too large.");
+  if (attachmentTotal() > maxAttachment()) return showMsg("sendMsg", "Attachments are too large.");
   const extra = attachments.length ? ` with ${attachments.length} attachment(s)` : "";
-  if (!confirm(`Send ${rows.length} email(s)${extra} from ${c.gmail}?`)) return;
+  const from = outlook ? msAccount.username : c.gmail;
+  if (!confirm(`Send ${rows.length} email(s)${extra} from ${from}?`)) return;
 
   $("sendBtn").disabled = true;
-  try { await api("/api/verify", c); }
-  catch (err) { $("sendBtn").disabled = false; return showMsg("sendMsg", esc(err.message)); }
+  try { outlook ? await msToken() : await api("/api/verify", c); }
+  catch (err) { $("sendBtn").disabled = false; return showMsg("sendMsg", esc(outlook ? msErrorText(err) : err.message)); }
 
   stopRequested = false;
   $("stopBtn").disabled = false;
@@ -415,8 +564,10 @@ $("sendBtn").onclick = async () => {
     let status = "sent", detail = "";
     if (!EMAIL_RE.test(mail.to)) { status = "skipped"; detail = "Missing or invalid email"; }
     else {
-      try { await api("/api/send", { ...c, to: mail.to, subject: mail.subject, html: mail.html, attachments: files }); }
-      catch (err) { status = "failed"; detail = err.message; }
+      try {
+        if (outlook) await sendViaGraph(mail, files);
+        else await api("/api/send", { ...c, to: mail.to, subject: mail.subject, html: mail.html, attachments: files });
+      } catch (err) { status = "failed"; detail = outlook ? msErrorText(err) : err.message; }
     }
     counts[status]++;
     done = i + 1;
@@ -434,6 +585,9 @@ $("sendBtn").onclick = async () => {
   $("sendBtn").disabled = false;
   $("stopBtn").classList.add("hidden");
 };
+
+// Restore the last-used provider (after everything above is defined).
+try { if (localStorage.getItem("ams_provider") === "outlook") setProvider("outlook"); } catch (e) {}
 </script>
 </body>
 </html>
